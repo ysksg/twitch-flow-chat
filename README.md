@@ -24,7 +24,7 @@ Google Chrome拡張機能版とTampermonkeyスクリプト版の2種類を提供
 
 ### 2. Tampermonkey版
 
-[Tampermonkey](https://www.tampermonkey.net/) などのユーザースクリプト管理拡張機能をインストールした後、`/twitch-flow-chat_tampermonkey/twitch-flow-chat-tampermonkey.js` の内容を新規スクリプトとして登録してください。
+[Tampermonkey](https://www.tampermonkey.net/) などのユーザースクリプト管理拡張機能をインストールした後、`/twitch-flow-chat_tampermonkey/twitch-flow-chat-tampermonkey.user.js` の内容を新規スクリプトとして登録してください。
 
 ## 使い方
 
