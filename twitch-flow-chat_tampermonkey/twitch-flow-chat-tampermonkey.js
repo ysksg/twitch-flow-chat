@@ -1,14 +1,14 @@
 // ==UserScript==
-// @name        Twitch Screen Comment Scroller v3
-// @namespace   mysksg
+// @name        Twitch Flow Chat
+// @namespace   まままうす
 // @description Twitch のコメントをニコニコ風にスクロールさせます。
 // @match       https://*.twitch.tv/*
-// @version     3.1
+// @version     1.2
 // @require     https://openuserjs.org/src/libs/sizzle/GM_config.js
 // @grant       GM_registerMenuCommand
 // @grant       GM_getValue
 // @grant       GM_setValue
-// @author      mysksg
+// @author      まままうす
 // ==/UserScript==
 
 (function () {
