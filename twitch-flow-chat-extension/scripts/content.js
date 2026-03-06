@@ -1,0 +1,630 @@
+const SCRIPTNAME = 'ScreenCommentScroller';
+
+/**
+ * デフォルト設定
+ */
+const DEFAULT_CONFIG = {
+    visibility: "visible",
+    color: '#ffffff',
+    outlineColor: '#000000',
+    opacity: 0.6,
+    displayLines: 15,         // Tampermonkey版の maxLanes (名前を同期)
+    fontSizeMode: 'Auto',      // サイズ計算モード (Auto/Custom)
+    customFontSize: '32px',    // カスタムサイズ (Customモード用)
+    fontFamily: 'sans-serif',  // フォントファミリー
+    anchorPosition: 'Center',  // 表示アンカー (Center/Top/Bottom)
+    duration: 5,
+    showBadges: true,
+    showUsername: true,
+    useUserColor: true,
+    enableQueue: false,
+    outlineSize: 2             // 縁取りサイズ (px)
+};
+
+let config = { ...DEFAULT_CONFIG };
+
+/**
+ * 設定の読み込み
+ */
+async function loadConfig() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(DEFAULT_CONFIG, (items) => {
+            config = { ...config, ...items };
+            console.debug(SCRIPTNAME, 'Config loaded:', config);
+            resolve();
+        });
+    });
+}
+
+// 設定変更を監視
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local') {
+        for (let key in changes) {
+            config[key] = changes[key].newValue;
+        }
+        console.debug(SCRIPTNAME, 'Config updated:', config);
+        // スタイルを再適用する必要がある場合がある
+        core.addStyle();
+        // 表示/非表示の切り替え
+        document.querySelectorAll('.flow-text').forEach(el => el.style.visibility = config.visibility);
+        core.updateToggleButtonState();
+    }
+});
+
+/**
+ * サイト定義
+ * TwitchのDOM構造に依存するセレクタをここで一元管理
+ */
+const site = {
+    // コメントを表示するスクリーン (動画プレイヤーのオーバーレイ)
+    getScreen: () => document.querySelector('.video-ref') || //PC版
+        document.querySelector('.video-ref--BLEPn') || //モバイル版 
+        document.querySelector('[data-a-target="video-player"]'),
+
+    // コメントリストのコンテナ (Live: チャットエリア, VOD: リスト)
+    getBoard: () => document.querySelector('.chat-scrollable-area__message-container') ||
+        document.querySelector('[data-test-selector="chat-scrollable-area__message-container"]') ||
+        document.querySelector('.video-chat__message-list-wrapper ul'),
+
+    // 個別のコメントノード (MutationObserverで検知されたノードから検索)
+    getCommentNode: (node) => node.querySelector('.vod-message, .chat-line__message') ||
+        (node.classList.contains('chat-line__message') ? node : null),
+};
+
+/**
+ * チャット解析オブジェクト
+ */
+const chatParser = {
+    getBadges(node) {
+        if (!config.showBadges) return [];
+        return Array.from(node.querySelectorAll('img.chat-badge')).map(img => ({
+            type: 'image',
+            src: img.src,
+            class: 'scroller-badge',
+            ratio: (img.naturalWidth && img.naturalHeight) ? (img.naturalWidth / img.naturalHeight) : 1
+        }));
+    },
+
+    getAuthor(node) {
+        if (!config.showUsername) return null;
+        const authorNode = node.querySelector('.chat-author__display-name');
+        if (!authorNode) return null;
+        return {
+            type: 'text',
+            text: authorNode.innerText,
+            color: config.useUserColor ? (authorNode.style.color || config.color) : config.color,
+            class: 'scroller-username'
+        };
+    },
+
+    getBody(node) {
+        const bodyNode = node.querySelector('.video-chat__message, [data-a-target="chat-line-message-body"]');
+        if (!bodyNode) return [];
+
+        const fragments = [];
+
+        /**
+         * 要素内のテキストと画像を順番に抽出する内部関数
+         * @param {Node} parent - 走査対象の親ノード
+         */
+        const parseNodes = (parent) => {
+            parent.childNodes.forEach(child => {
+                if (child.nodeType === 3) { // テキストノード
+                    const text = child.textContent; // trimしない（連続するスタンプ間のスペース保持のため）
+                    if (text) fragments.push({ type: 'text', text });
+                } else if (child.nodeType === 1) { // 要素ノード
+                    // 不要な要素（VODのタイムスタンプ後のコロンなど）を除外
+                    if (child.textContent === ':' && child.classList.contains('fViKsQ')) return;
+
+                    if (child.classList.contains('text-fragment')) {
+                        // 通常のテキスト
+                        fragments.push({ type: 'text', text: child.textContent });
+                    } else if (child.tagName === 'IMG' || child.querySelector('img.chat-image')) {
+                        // 画像そのもの、または画像を含む要素（スタンプ）
+                        const imgs = child.tagName === 'IMG' ? [child] : child.querySelectorAll('img.chat-image');
+                        imgs.forEach(img => {
+                            // 元画像のサイズからアスペクト比を計算
+                            const ratio = (img.naturalWidth && img.naturalHeight) ? (img.naturalWidth / img.naturalHeight) : 1;
+                            fragments.push({ type: 'image', src: img.src, class: 'scroller-image', ratio: ratio });
+                        });
+                    } else if (child.childNodes.length > 0) {
+                        // class="InjectLayout-sc-1i43xsx-0" 等のラップ要素は中身を再帰的に見る
+                        parseNodes(child);
+                    } else if (child.textContent) {
+                        // その他（リンクなど）はテキストとして扱う
+                        fragments.push({ type: 'text', text: child.textContent });
+                    }
+                }
+            });
+        };
+
+        parseNodes(bodyNode);
+        return fragments;
+    }
+};
+
+let screen, board;
+let commentContainer; // 16:9を維持するコメント描画用コンテナ
+let resizeObserver;   // 画面リサイズ検知用
+let commentQueue = [];
+let queueTimer = null;
+const QUEUE_PROCESS_INTERVAL = 100;
+
+let lanes = [];
+let url = document.location.href;
+let commentObserver;
+let controlsObserver;
+let keyEvent;
+
+const core = {
+    async waitStart() {
+        console.log(SCRIPTNAME, 'waitStart');
+        await loadConfig();
+
+        window.setInterval(() => {
+            const screen_ = site.getScreen();
+            const board_ = site.getBoard();
+            const url_ = document.location.href;
+
+            if (screen_ && board_ && (screen_ !== screen || board_ !== board || url_ !== url)) {
+                console.log(SCRIPTNAME, 'PageChange or Init detected.');
+                screen = screen_;
+                board = board_;
+                url = url_;
+                core.initialize();
+            }
+
+            core.createToggleButton();
+        }, 3000);
+    },
+
+    initialize() {
+        console.log(SCRIPTNAME, 'initialize');
+        lanes = [];
+        commentQueue = [];
+        if (queueTimer) {
+            clearInterval(queueTimer);
+            queueTimer = null;
+        }
+        core.addKeyEvent();
+        core.addStyle();
+        core.createContainer(); // コンテナ生成
+        core.createToggleButton();
+        core.listenComments();
+    },
+
+    /**
+     * 16:9コメント専用コンテナの作成と維持
+     */
+    createContainer() {
+        if (commentContainer) commentContainer.remove();
+        if (resizeObserver) resizeObserver.disconnect();
+
+        commentContainer = document.createElement('div');
+        commentContainer.id = SCRIPTNAME + '-container';
+        // コンテナ自体のスタイルはオーバーレイ全面。
+        // 実際のコメント位置計算に必要な基準として機能する。
+        commentContainer.style.cssText = `
+            position: absolute;
+            pointer-events: none;
+            overflow: hidden;
+            z-index: 10;
+        `;
+        screen.appendChild(commentContainer);
+
+        // リサイズ検知とコンテナ寸法の再計算
+        resizeObserver = new ResizeObserver(entries => {
+            for (let entry of entries) {
+                core.updateContainerSize(entry.contentRect.width, entry.contentRect.height);
+            }
+        });
+        resizeObserver.observe(screen);
+
+        // 初回の算出
+        core.updateContainerSize(screen.offsetWidth, screen.offsetHeight);
+    },
+
+    /**
+     * プレイヤー領域の寸法変更に伴い、コンテナを16:9に合わせて再計算
+     */
+    updateContainerSize(screenWidth, screenHeight) {
+        if (!commentContainer) return;
+
+        const targetRatio = 16 / 9;
+        const currentRatio = screenWidth / screenHeight;
+
+        let cWidth = screenWidth, cHeight = screenHeight;
+
+        if (currentRatio > targetRatio) {
+            // 画面が横長すぎる (ピラーボックス)
+            cWidth = screenHeight * targetRatio;
+        } else {
+            // 画面が縦長すぎる (レターボックス)
+            cHeight = screenWidth / targetRatio;
+        }
+
+        // アンカー設定に合わせた配置 (Center / Top / Bottom)
+        let left = (screenWidth - cWidth) / 2, top = 0;
+
+        if (config.anchorPosition === 'Center') {
+            top = (screenHeight - cHeight) / 2;
+        } else if (config.anchorPosition === 'Bottom') {
+            top = screenHeight - cHeight;
+        }
+
+        commentContainer.style.width = `${cWidth}px`;
+        commentContainer.style.height = `${cHeight}px`;
+        commentContainer.style.left = `${left}px`;
+        commentContainer.style.top = `${top}px`;
+    },
+
+    addKeyEvent() {
+        if (keyEvent) window.removeEventListener('keypress', keyEvent);
+        keyEvent = (e) => {
+            if (e.key === "c" || e.key === "C") {
+                const newVisibility = (config.visibility === "visible") ? "hidden" : "visible";
+                chrome.storage.local.set({ visibility: newVisibility });
+            }
+        };
+        window.addEventListener('keypress', keyEvent);
+    },
+
+    addStyle() {
+        document.querySelector('style#' + SCRIPTNAME + 'Style')?.remove();
+        const style = document.createElement('style');
+        style.id = SCRIPTNAME + 'Style';
+        style.innerHTML = `
+            .flow-text {
+                height: auto !important;
+                line-height: normal !important;
+                width: auto !important;
+                pointer-events: none;      /* クリック透過 */
+                font-family: ${config.fontFamily};
+                font-weight: bold;
+                white-space: nowrap;       /* 折り返しなし */
+                position: absolute;
+                color: ${config.color};
+                will-change: animation, transform; /* パフォーマンス最適化 */
+                opacity: ${config.opacity};
+
+                /* 視認性向上のための縁取り (ベストプラクティス) */
+                -webkit-text-stroke: calc(${config.outlineSize}px * 2) ${config.outlineColor};
+                paint-order: stroke fill;
+
+                display: flex;
+                align-items: center;
+                column-gap: 4px;           /* 要素間の隙間 */
+            }
+
+            .flow-text img {
+                height: 1.2em;             /* 文字サイズに合わせる */
+                width: auto;
+                vertical-align: middle;
+            }
+            @keyframes flowing {
+                100% { transform: translateX(-100%); } /* 右端(初期位置)から左へ移動 */
+            }
+            .scroller-username {
+                font-size: 0.7em;         /* ユーザー名を少し小さく */
+                margin-right: 10px;
+            }`;
+        document.head.appendChild(style);
+        console.debug(SCRIPTNAME, 'Styles injected.');
+    },
+
+    /**
+     * プレイヤーコントロールにトグルボタンを追加
+     * 広告再生などでDOMが再生成された場合にも対応できるよう、Observerと定期チェックを併用
+     */
+    createToggleButton() {
+        // すでにボタンがあれば何もしない
+        if (document.getElementById(SCRIPTNAME + '-toggle-btn')) return;
+
+        // 挿入先: プレイヤーコントロールのグループ
+        // PC版: .player-controls__right-control-group
+        let rightControls = document.querySelector('.player-controls__right-control-group');
+
+        if (!rightControls) {
+            // モバイル版のボタン配置場所を探索 (自動的に隠れるレイヤーを優先)
+            const mobileSettingsBtn = document.querySelector('[data-a-target="player-settings-button"]');
+            if (mobileSettingsBtn) {
+                rightControls = mobileSettingsBtn.closest('.Layout-sc-1xcs6mc-0') || mobileSettingsBtn.parentElement;
+            } else {
+                rightControls = document.querySelector('.player-controls') ||
+                    document.querySelector('.video-player__default-player .Layout-sc-1xcs6mc-0.hyTHZf');
+            }
+        }
+
+        if (!rightControls) return;
+
+        // 親要素（コントロールグループ）の変更を監視して、ボタンが消されたら再追加する
+        if (!controlsObserver) {
+            controlsObserver = new MutationObserver(() => {
+                core.createToggleButton();
+            });
+            controlsObserver.observe(rightControls, { childList: true });
+        }
+
+        // ボタンコンテナ作成
+        const container = document.createElement('div');
+        container.className = 'InjectLayout-sc-1i43xsx-0 iDMNUO';
+        container.id = SCRIPTNAME + '-toggle-btn';
+
+        // ボタン本体
+        const button = document.createElement('button');
+        button.className = 'ScCoreButton-sc-ocjdkq-0 glPhvE ScButtonIcon-sc-9yap0r-0 dcNXJO';
+        button.ariaLabel = 'スクロールコメント切り替え';
+
+        // アイコン
+        const iconDiv = document.createElement('div');
+        iconDiv.className = 'ButtonIconFigure-sc-1emm8lf-0 lnTwMD';
+        const svgWrapper = document.createElement('div');
+        svgWrapper.className = 'ScSvgWrapper-sc-wkgzod-0 kccyMt tw-svg';
+
+        // SVG定義
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('width', '24');
+        svg.setAttribute('height', '24');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.classList.add('scroller-toggle-icon');
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z');
+        path.id = SCRIPTNAME + '-toggle-path';
+
+        svg.appendChild(path);
+        svgWrapper.appendChild(svg);
+        iconDiv.appendChild(svgWrapper);
+        button.appendChild(iconDiv);
+        container.appendChild(button);
+
+        // クリックイベント
+        button.onclick = (e) => {
+            const newVisibility = (config.visibility === "visible") ? "hidden" : "visible";
+            chrome.storage.local.set({ visibility: newVisibility });
+            console.log(SCRIPTNAME, 'comment visibility toggled:', newVisibility);
+        };
+
+        // 初期状態反映
+        core.updateToggleButtonState();
+
+        // 挿入位置の調整: 設定ボタンの左隣に挿入する
+        const settingsBtn = rightControls.querySelector('[data-a-target="player-settings-button"]');
+
+        if (settingsBtn) {
+            // Settingsボタンを含むコンテナ（rightControlsの直下の子要素）を探して、その前に挿入
+            let targetContainer = settingsBtn;
+            while (targetContainer && targetContainer.parentElement !== rightControls) {
+                targetContainer = targetContainer.parentElement;
+            }
+
+            if (targetContainer) {
+                rightControls.insertBefore(container, targetContainer);
+            } else {
+                rightControls.insertBefore(container, rightControls.firstChild);
+            }
+        } else {
+            rightControls.appendChild(container); // 設定ボタンがない場合は末尾に追加
+        }
+        console.debug(SCRIPTNAME, 'Toggle button created inside rightControls.');
+    },
+
+    updateToggleButtonState() {
+        const path = document.getElementById(SCRIPTNAME + '-toggle-path');
+        if (path) {
+            path.setAttribute('fill', config.visibility === 'visible' ? 'currentColor' : '#888');
+        }
+        const btn = document.getElementById(SCRIPTNAME + '-toggle-btn');
+        if (btn) {
+            btn.style.opacity = config.visibility === 'visible' ? '1' : '0.5';
+        }
+    },
+
+    listenComments() {
+        if (commentObserver) commentObserver.disconnect();
+        commentObserver = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach((node) => {
+                        if (node.nodeType === 1) {
+                            const commentNode = site.getCommentNode(node);
+                            if (commentNode) {
+                                core.handleComment(commentNode);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+        commentObserver.observe(board, { childList: true });
+    },
+
+    handleComment(commentNode) {
+        if (!core.attachComment(commentNode)) {
+            if (config.enableQueue) {
+                core.enqueueComment(commentNode);
+            }
+        }
+    },
+
+    enqueueComment(commentNode) {
+        const fragments = [
+            ...chatParser.getBadges(commentNode),
+            chatParser.getAuthor(commentNode),
+            ...chatParser.getBody(commentNode)
+        ].filter(f => f);
+
+        if (fragments.length > 0) {
+            commentQueue.push(fragments);
+            core.startQueueProcessing();
+        }
+    },
+
+    startQueueProcessing() {
+        if (queueTimer) return;
+
+        queueTimer = setInterval(() => {
+            if (commentQueue.length === 0) {
+                clearInterval(queueTimer);
+                queueTimer = null;
+                return;
+            }
+
+            const fragments = commentQueue[0];
+            if (core.attachComment(null, fragments)) {
+                commentQueue.shift();
+            }
+        }, QUEUE_PROCESS_INTERVAL);
+    },
+
+    attachComment(commentNode, preParsedFragments = null) {
+        if (!commentContainer) return false;
+
+        let fragments;
+
+        if (preParsedFragments) {
+            fragments = preParsedFragments;
+        } else if (commentNode) {
+            // パーサーを使ってバッジ、名前、本文を取得・結合
+            fragments = [
+                ...chatParser.getBadges(commentNode),
+                chatParser.getAuthor(commentNode),
+                ...chatParser.getBody(commentNode)
+            ].filter(f => f); // nullを除外
+        } else {
+            return false;
+        }
+
+        if (fragments.length === 0) return false;
+
+        // 1. DOMフラグメントの作成 (表示内容の構築)
+        const fragmentContainer = document.createDocumentFragment();
+        fragments.forEach(f => {
+            if (f.type === 'text') {
+                const span = document.createElement('span');
+                span.innerText = f.text;
+                if (f.color) span.style.color = f.color;
+                if (f.class) span.className = f.class;
+                fragmentContainer.appendChild(span);
+            } else if (f.type === 'image') {
+                const img = document.createElement('img');
+                img.src = f.src;
+                if (f.class) img.className = f.class;
+                // アスペクト比から幅を設定
+
+                if (f.ratio) {
+                    // バッジは少し小さく(0.5em)、スタンプはそのまま(1.2em)
+                    const height = (f.class === 'scroller-badge') ? 0.5 : 1.2;
+                    img.style.height = height + 'em';
+                    img.style.width = (f.ratio * height) + 'em';
+                }
+                fragmentContainer.appendChild(img);
+            }
+        });
+
+        // コンテナの現時点の寸法
+        const cWidth = commentContainer.offsetWidth;
+        const cHeight = commentContainer.offsetHeight;
+        if (cWidth === 0 || cHeight === 0) return false;
+
+        // 2. フォントサイズと1レーンの高さを計算
+        let laneHeight, fontSizeStr;
+        if (config.fontSizeMode === 'Auto') {
+            const pxSize = cHeight / config.displayLines * 0.8;
+            laneHeight = cHeight / config.displayLines;
+            fontSizeStr = `${pxSize}px`;
+        } else {
+            fontSizeStr = config.customFontSize;
+            // px, em などを解釈させるためのダミー
+            const tempDiv = document.createElement('div');
+            tempDiv.style.cssText = `position:absolute; visibility:hidden; font-size:${fontSizeStr};`;
+            tempDiv.innerText = 'A';
+            document.body.appendChild(tempDiv);
+            laneHeight = tempDiv.offsetHeight;
+            document.body.removeChild(tempDiv);
+            if (laneHeight === 0) {
+                laneHeight = 32;
+                fontSizeStr = '32px';
+            }
+        }
+
+        // 3. コンテンツ幅の計算 (衝突判定に必要)
+        const tempDiv = document.createElement('div');
+        tempDiv.className = "flow-text"; // 本番と同じスタイルを適用
+        tempDiv.style.cssText = `position:absolute; visibility:hidden; font-size:${fontSizeStr};`;
+        tempDiv.appendChild(fragmentContainer.cloneNode(true));
+        document.body.appendChild(tempDiv);
+
+        // 幅を取得 (余白として若干プラスする)
+        const totalWidth = tempDiv.offsetWidth + parseFloat(fontSizeStr);
+        document.body.removeChild(tempDiv);
+
+        if (totalWidth === 0) return false;
+
+        // 4. 衝突・配置計算 (タイムスタンプベース)
+        const now = Date.now();
+        const distance = cWidth + totalWidth; // 移動総距離 (コンテナ幅 + コメント幅)
+        const durationMs = config.duration * 1000;      // 移動にかかる時間 (ms)
+        const speed = distance / durationMs;            // 速度 (px/ms)
+
+        const commentData = {
+            width: totalWidth,
+            // deleteTime: コンテナ左端から完全に消え去る時刻
+            deleteTime: now + durationMs,
+            // touchLeftEdgeTime: コメント先頭がコンテナ左端に到達する時刻
+            touchLeftEdgeTime: now + (cWidth / speed),
+            // safeToEnterTime: 次のコメントが重ならずに右端から出現開始できる時刻
+            safeToEnterTime: now + (totalWidth / speed)
+        };
+
+        // 5. 空きレーンの探索 (displayLines で制限)
+        let laneIndex = -1;
+        for (let i = 0; i < config.displayLines; i++) {
+            const lane = lanes[i];
+
+            // レーンが空、または前のコメントが既に消え去っている場合 -> 使用可能
+            if (!lane || lane.deleteTime < now) {
+                laneIndex = i;
+                break;
+            }
+
+            // 衝突チェック
+            // 条件1: 前のコメントの最後尾が画面内に入りきっているか (safeToEnterTime <= now)
+            // 条件2: 今回のコメントが前のコメントに追いつかないか (追い越し判定)
+            // (前のコメントが消える時刻 <= 今回のコメントが左端に到達する時刻)
+            if (lane.safeToEnterTime <= now && lane.deleteTime <= commentData.touchLeftEdgeTime) {
+                laneIndex = i;
+                break;
+            }
+        }
+
+        // 空きレーンがない場合は表示しない
+        if (laneIndex === -1) return false;
+
+        // レーン情報を更新
+        lanes[laneIndex] = commentData;
+
+        // 6. 画面への描画
+        const flowText = document.createElement("div");
+        flowText.className = "flow-text";
+
+        flowText.style.cssText = `
+            visibility: ${config.visibility};
+            top: ${laneHeight * laneIndex}px;
+            font-size: ${fontSizeStr};
+            transform: translateX(${cWidth}px);
+            animation: flowing ${config.duration}s linear;
+        `;
+
+        flowText.appendChild(fragmentContainer);
+
+        // アニメーション終了後に要素を削除 (メモリリーク防止)
+        flowText.addEventListener('animationend', () => flowText.remove());
+
+        commentContainer.appendChild(flowText);
+
+        return true;
+    }
+};
+
+core.waitStart();

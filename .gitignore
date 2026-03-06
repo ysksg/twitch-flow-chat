@@ -1,0 +1,18 @@
+# Twitch Flow Chat Git Exclusions
+
+# Sample HTML files (large and for reference only)
+sample-html/
+
+# Extension ZIP files (artifacts to be rebuilt)
+*.zip
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Workspace settings (optional, but often ignored)
+.vscode/
+.idea/
+
+# Environment variables
+.env
