@@ -13,7 +13,13 @@ const DEFAULT_CONFIG = {
     showBadges: true,
     showUsername: true,
     useUserColor: true,
-    enableQueue: false
+    enableQueue: false,
+    enableMultiLayer: true,
+    ttsEnabled: false,
+    ttsVoice: '',
+    ttsVolume: 1.0,
+    ttsSpeed: 1.0,
+    ttsAutoSpeed: true
 };
 
 // 要素の取得
@@ -21,10 +27,14 @@ const fields = [
     'visibility', 'color', 'outlineColor', 'outlineSize', 'opacity',
     'fontFamily', 'fontSizeMode', 'customFontSize', 'displayLines',
     'anchorPosition', 'duration', 'showBadges',
-    'showUsername', 'useUserColor', 'enableQueue'
+    'showUsername', 'useUserColor', 'enableQueue',
+    'enableMultiLayer', 'ttsEnabled', 'ttsVoice', 'ttsVolume', 'ttsSpeed', 'ttsAutoSpeed'
 ];
 
 document.addEventListener('DOMContentLoaded', () => {
+    // 音声リストの初期化
+    initVoiceList();
+
     // 現在の設定を読み込んで反映
     chrome.storage.local.get(DEFAULT_CONFIG, (config) => {
         fields.forEach(id => {
@@ -81,6 +91,27 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
+// Sample Speak button
+document.getElementById('ttsSpeakSample').addEventListener('click', () => {
+    const voiceName = document.getElementById('ttsVoice').value;
+    const speed = parseFloat(document.getElementById('ttsSpeed').value) || 1.0;
+    const volume = parseFloat(document.getElementById('ttsVolume').value) || 1.0;
+
+    const text = (voiceName.includes('ja') || voiceName.includes('JP'))
+        ? "これはサンプル音声です"
+        : "This is a sample voice";
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = speechSynthesis.getVoices();
+    const voice = voices.find(v => v.name === voiceName);
+    if (voice) utterance.voice = voice;
+    utterance.rate = speed;
+    utterance.volume = volume;
+
+    speechSynthesis.cancel();
+    speechSynthesis.speak(utterance);
+});
+
 function updateOpacityValue(val) {
     const display = document.getElementById('opacityValue');
     if (display) display.innerText = val;
@@ -91,4 +122,49 @@ function updateFontSizeVisibility(mode) {
     if (field) {
         field.style.display = (mode === 'Custom') ? 'flex' : 'none';
     }
+}
+
+function initVoiceList() {
+    const voiceSelect = document.getElementById('ttsVoice');
+    if (!voiceSelect) return;
+
+    const updateVoices = () => {
+        const voices = speechSynthesis.getVoices();
+        if (voices.length === 0) return;
+
+        // 保存されている値を取得
+        chrome.storage.local.get(['ttsVoice'], (res) => {
+            const savedVoice = res.ttsVoice || '';
+
+            voiceSelect.innerHTML = '<option value="">(システムデフォルト)</option>';
+
+            // 日本語と英語を優先的にソート
+            const sortedVoices = [...voices].sort((a, b) => {
+                const aIsJa = a.lang.startsWith('ja');
+                const bIsJa = b.lang.startsWith('ja');
+                if (aIsJa && !bIsJa) return -1;
+                if (!aIsJa && bIsJa) return 1;
+
+                const aIsEn = a.lang.startsWith('en');
+                const bIsEn = b.lang.startsWith('en');
+                if (aIsEn && !bIsEn) return -1;
+                if (!aIsEn && bIsEn) return 1;
+
+                return a.name.localeCompare(b.name);
+            });
+
+            sortedVoices.forEach(voice => {
+                const option = document.createElement('option');
+                option.value = voice.name;
+                option.textContent = `${voice.name} (${voice.lang})`;
+                if (voice.name === savedVoice) option.selected = true;
+                voiceSelect.appendChild(option);
+            });
+        });
+    };
+
+    if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = updateVoices;
+    }
+    updateVoices();
 }

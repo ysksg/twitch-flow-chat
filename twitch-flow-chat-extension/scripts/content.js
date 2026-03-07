@@ -18,7 +18,13 @@ const DEFAULT_CONFIG = {
     showUsername: true,
     useUserColor: true,
     enableQueue: false,
-    outlineSize: 2             // 縁取りサイズ (px)
+    outlineSize: 2,            // 縁取りサイズ (px)
+    enableMultiLayer: true,    // マルチレイヤー表示フラグ
+    ttsEnabled: false,         // 音声読み上げフラグ
+    ttsVoice: null,            // 読み上げ音声
+    ttsVolume: 1.0,            // 読み上げ音量
+    ttsSpeed: 1.0,             // 読み上げ基本速度
+    ttsAutoSpeed: true         // 数に応じた速度自動調整
 };
 
 let config = { ...DEFAULT_CONFIG };
@@ -60,6 +66,9 @@ const site = {
     getScreen: () => document.querySelector('.video-ref') || //PC版
         document.querySelector('.video-ref--BLEPn') || //モバイル版 
         document.querySelector('[data-a-target="video-player"]'),
+
+    // 動画要素自体の取得
+    getVideo: () => document.querySelector('video'),
 
     // コメントリストのコンテナ (Live: チャットエリア, VOD: リスト)
     getBoard: () => document.querySelector('.chat-scrollable-area__message-container') ||
@@ -150,7 +159,14 @@ let commentQueue = [];
 let queueTimer = null;
 const QUEUE_PROCESS_INTERVAL = 100;
 
-let lanes = [];
+let lanes = {}; // 0.5刻みを保持するためオブジェクトとして扱う
+let ttsCount = 0; // 読み上げ中のコメント数
+let recentTtsTexts = []; // 重複読み上げ防止用履歴
+const MAX_TTS_HISTORY = 20; // 保持する履歴の最大件数
+
+let activeAnimations = new Set(); // 実行中のアニメーション管理
+let isVideoPaused = false; // 動画の一時停止状態フラグ
+
 let url = document.location.href;
 let commentObserver;
 let controlsObserver;
@@ -180,7 +196,11 @@ const core = {
 
     initialize() {
         console.log(SCRIPTNAME, 'initialize');
-        lanes = [];
+        lanes = {};
+        ttsCount = 0;
+        recentTtsTexts = [];
+        activeAnimations.clear();
+        isVideoPaused = false;
         commentQueue = [];
         if (queueTimer) {
             clearInterval(queueTimer);
@@ -190,7 +210,41 @@ const core = {
         core.addStyle();
         core.createContainer(); // コンテナ生成
         core.createToggleButton();
+        core.setupVideoSync(); // 動画同期の設定
         core.listenComments();
+    },
+
+    /**
+     * 動画の再生・停止状態を監視し、アニメーションと同期させる
+     */
+    setupVideoSync() {
+        const video = site.getVideo();
+        if (!video) return;
+
+        const onPause = () => {
+            isVideoPaused = true;
+            activeAnimations.forEach(anim => anim.pause());
+            console.debug(SCRIPTNAME, 'Video paused. Animations suspended.');
+        };
+
+        const onPlay = () => {
+            isVideoPaused = false;
+            activeAnimations.forEach(anim => anim.play());
+            console.debug(SCRIPTNAME, 'Video started. Animations resumed.');
+        };
+
+        video.removeEventListener('pause', onPause);
+        video.removeEventListener('waiting', onPause);
+        video.removeEventListener('play', onPlay);
+        video.removeEventListener('playing', onPlay);
+
+        video.addEventListener('pause', onPause);
+        video.addEventListener('waiting', onPause);
+        video.addEventListener('play', onPlay);
+        video.addEventListener('playing', onPlay);
+
+        // 初期状態の反映
+        if (video.paused) onPause();
     },
 
     /**
@@ -300,9 +354,6 @@ const core = {
                 height: 1.2em;             /* 文字サイズに合わせる */
                 width: auto;
                 vertical-align: middle;
-            }
-            @keyframes flowing {
-                100% { transform: translateX(-100%); } /* 右端(初期位置)から左へ移動 */
             }
             .scroller-username {
                 font-size: 0.7em;         /* ユーザー名を少し小さく */
@@ -440,11 +491,67 @@ const core = {
     },
 
     handleComment(commentNode) {
+        // 並行して音声読み上げをトリガー
+        core.speakComment(commentNode);
+
         if (!core.attachComment(commentNode)) {
             if (config.enableQueue) {
                 core.enqueueComment(commentNode);
             }
         }
+    },
+
+    speakComment(commentNode, preParsedFragments = null) {
+        if (!config.ttsEnabled) return;
+
+        let textFragments;
+        if (preParsedFragments) {
+            textFragments = preParsedFragments.filter(f => f.type === 'text');
+        } else if (commentNode) {
+            textFragments = chatParser.getBody(commentNode).filter(f => f.type === 'text');
+        } else {
+            return;
+        }
+
+        let text = textFragments.map(f => f.text).join(' ').trim();
+        if (!text) return;
+
+        // 重複コメントのスキップ (待ち件数が5件以上の時のみ実行)
+        if (ttsCount >= 5) {
+            if (recentTtsTexts.includes(text)) {
+                return;
+            }
+        }
+        recentTtsTexts.push(text);
+        if (recentTtsTexts.length > MAX_TTS_HISTORY) {
+            recentTtsTexts.shift();
+        }
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        if (config.ttsVoice) {
+            const voices = speechSynthesis.getVoices();
+            const voice = voices.find(v => v.name === config.ttsVoice);
+            if (voice) utterance.voice = voice;
+        }
+
+        let rate = parseFloat(config.ttsSpeed) || 1.0;
+
+        if (config.ttsAutoSpeed) {
+            // 現在のキュー（発話中＋待機中）に応じて速度を上げる
+            if (ttsCount >= 1) {
+                // 1件から徐々に加速（例: 1件で1.2倍, 3件で1.6倍, 5件で2.0倍）
+                rate = rate * (1.0 + ttsCount * 0.2);
+            }
+        }
+        utterance.rate = Math.min(3.0, Math.max(0.1, rate)); // 0.1 ~ 3.0 の範囲に制限
+        utterance.volume = Math.min(1.0, Math.max(0.0, parseFloat(config.ttsVolume) || 1.0)); // 0.0 ~ 1.0
+
+        // 完了時にカウントを減らす
+        utterance.onend = () => { ttsCount = Math.max(0, ttsCount - 1); };
+        utterance.onerror = () => { ttsCount = Math.max(0, ttsCount - 1); };
+
+        ttsCount++;
+        speechSynthesis.speak(utterance);
     },
 
     enqueueComment(commentNode) {
@@ -470,6 +577,8 @@ const core = {
                 return;
             }
 
+            if (isVideoPaused) return; // 動画停止中はキューを処理しない
+
             const fragments = commentQueue[0];
             if (core.attachComment(null, fragments)) {
                 commentQueue.shift();
@@ -478,7 +587,7 @@ const core = {
     },
 
     attachComment(commentNode, preParsedFragments = null) {
-        if (!commentContainer) return false;
+        if (!commentContainer || isVideoPaused) return false;
 
         let fragments;
 
@@ -579,6 +688,8 @@ const core = {
 
         // 5. 空きレーンの探索 (displayLines で制限)
         let laneIndex = -1;
+
+        // まず整数の通常レーン (0, 1, 2...) を探索
         for (let i = 0; i < config.displayLines; i++) {
             const lane = lanes[i];
 
@@ -588,17 +699,35 @@ const core = {
                 break;
             }
 
-            // 衝突チェック
-            // 条件1: 前のコメントの最後尾が画面内に入りきっているか (safeToEnterTime <= now)
-            // 条件2: 今回のコメントが前のコメントに追いつかないか (追い越し判定)
-            // (前のコメントが消える時刻 <= 今回のコメントが左端に到達する時刻)
+            // 衝突チェック (通常レーン)
             if (lane.safeToEnterTime <= now && lane.deleteTime <= commentData.touchLeftEdgeTime) {
                 laneIndex = i;
                 break;
             }
         }
 
-        // 空きレーンがない場合は表示しない
+        // 通常レーンに空きがない場合
+        if (laneIndex === -1) {
+            // マルチレイヤー（強制表示）が有効な場合のみ、0.5行ずらしのレーンを探索
+            if (config.enableMultiLayer) {
+                // 画面からはみ出ない範囲 (0.5, 1.5 ... displayLines - 1.5) で探索
+                for (let i = 0.5; i <= config.displayLines - 1.5; i++) {
+                    const lane = lanes[i];
+
+                    // 0.5行レーンが空いているかチェック（上下の重なりは考慮しない）
+                    if (!lane || lane.deleteTime < now) {
+                        laneIndex = i;
+                        break;
+                    }
+                    if (lane.safeToEnterTime <= now && lane.deleteTime <= commentData.touchLeftEdgeTime) {
+                        laneIndex = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // どこにも空きがない場合は表示しない (非表示またはキューイングへ)
         if (laneIndex === -1) return false;
 
         // レーン情報を更新
@@ -612,16 +741,35 @@ const core = {
             visibility: ${config.visibility};
             top: ${laneHeight * laneIndex}px;
             font-size: ${fontSizeStr};
-            transform: translateX(${cWidth}px);
-            animation: flowing ${config.duration}s linear;
+            left: 100%;
+            white-space: nowrap;
         `;
 
         flowText.appendChild(fragmentContainer);
-
-        // アニメーション終了後に要素を削除 (メモリリーク防止)
-        flowText.addEventListener('animationend', () => flowText.remove());
-
         commentContainer.appendChild(flowText);
+
+        // Web Animations API によるアニメーション
+        const effect = [
+            { transform: 'translateX(0)' },
+            { transform: `translateX(-${cWidth + totalWidth}px)` }
+        ];
+
+        const animation = flowText.animate(effect, {
+            duration: config.duration * 1000,
+            easing: 'linear',
+            fill: 'forwards'
+        });
+
+        // 停止中なら即座に停止させる
+        if (isVideoPaused) animation.pause();
+
+        activeAnimations.add(animation);
+
+        // 終了後に削除
+        animation.onfinish = () => {
+            activeAnimations.delete(animation);
+            flowText.remove();
+        };
 
         return true;
     }

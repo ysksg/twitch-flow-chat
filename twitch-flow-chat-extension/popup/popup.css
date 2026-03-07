@@ -20,6 +20,16 @@ h1 {
     text-align: center;
 }
 
+.section-title {
+    font-size: 0.95rem;
+    font-weight: bold;
+    color: #bf94ff;
+    border-bottom: 1px solid #303032;
+    padding-bottom: 4px;
+    margin-top: 10px;
+    margin-bottom: 5px;
+}
+
 .field {
     display: flex;
     justify-content: space-between;
@@ -85,5 +95,28 @@ button#reset {
 }
 
 button#reset:hover {
+    background-color: #464649;
+}
+
+.tts-voice-container {
+    display: flex;
+    gap: 4px;
+    flex: 1;
+    justify-content: flex-end;
+    margin-left: 10px;
+}
+
+.tts-voice-container select {
+    flex: 1;
+    max-width: 140px;
+}
+
+button#ttsSpeakSample {
+    padding: 2px 8px;
+    font-size: 0.8rem;
+    background-color: #303032;
+}
+
+button#ttsSpeakSample:hover {
     background-color: #464649;
 }
