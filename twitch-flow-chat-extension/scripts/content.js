@@ -24,6 +24,7 @@ const DEFAULT_CONFIG = {
     ttsVoice: null,            // 読み上げ音声
     ttsVolume: 1.0,            // 読み上げ音量
     ttsSpeed: 1.0,             // 読み上げ基本速度
+    ttsMaxQueue: 5,            // 読み上げ待ちの最大許容数
     ttsAutoSpeed: true         // 数に応じた速度自動調整
 };
 
@@ -164,6 +165,9 @@ let ttsCount = 0; // 読み上げ中のコメント数
 let recentTtsTexts = []; // 重複読み上げ防止用履歴
 const MAX_TTS_HISTORY = 20; // 保持する履歴の最大件数
 
+let managedTtsQueue = [];   // アプリ側で管理する読み上げ待ちキュー
+let isTtsSpeaking = false;    // 現在読み上げ中かどうか
+
 let activeAnimations = new Set(); // 実行中のアニメーション管理
 let isVideoPaused = false; // 動画の一時停止状態フラグ
 
@@ -199,6 +203,8 @@ const core = {
         lanes = {};
         ttsCount = 0;
         recentTtsTexts = [];
+        managedTtsQueue = [];
+        isTtsSpeaking = false;
         activeAnimations.clear();
         isVideoPaused = false;
         commentQueue = [];
@@ -547,10 +553,39 @@ const core = {
         utterance.volume = Math.min(1.0, Math.max(0.0, parseFloat(config.ttsVolume) || 1.0)); // 0.0 ~ 1.0
 
         // 完了時にカウントを減らす
-        utterance.onend = () => { ttsCount = Math.max(0, ttsCount - 1); };
-        utterance.onerror = () => { ttsCount = Math.max(0, ttsCount - 1); };
+        utterance.onend = () => {
+            ttsCount = Math.max(0, ttsCount - 1);
+            isTtsSpeaking = false;
+            core.processNextTts();
+        };
+        utterance.onerror = () => {
+            ttsCount = Math.max(0, ttsCount - 1);
+            isTtsSpeaking = false;
+            core.processNextTts();
+        };
 
         ttsCount++;
+
+        // 独自キューに追加して処理を開始
+        managedTtsQueue.push(utterance);
+
+        // 最大許容数を超えている場合は古いものを破棄
+        while (managedTtsQueue.length > (parseInt(config.ttsMaxQueue) || 5)) {
+            managedTtsQueue.shift();
+            ttsCount = Math.max(0, ttsCount - 1);
+        }
+
+        core.processNextTts();
+    },
+
+    /**
+     * 次のTTSキューを処理する
+     */
+    processNextTts() {
+        if (isTtsSpeaking || managedTtsQueue.length === 0) return;
+
+        const utterance = managedTtsQueue.shift();
+        isTtsSpeaking = true;
         speechSynthesis.speak(utterance);
     },
 

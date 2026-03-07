@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Twitch Flow Chat",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Twitchのチャットを配信画面上にニコニコ動画風にスクロールさせます。",
   "permissions": [
     "storage"

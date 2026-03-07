@@ -16,9 +16,9 @@ const DEFAULT_CONFIG = {
     enableQueue: false,
     enableMultiLayer: true,
     ttsEnabled: false,
-    ttsVoice: '',
     ttsVolume: 1.0,
     ttsSpeed: 1.0,
+    ttsMaxQueue: 5,
     ttsAutoSpeed: true
 };
 
@@ -28,7 +28,7 @@ const fields = [
     'fontFamily', 'fontSizeMode', 'customFontSize', 'displayLines',
     'anchorPosition', 'duration', 'showBadges',
     'showUsername', 'useUserColor', 'enableQueue',
-    'enableMultiLayer', 'ttsEnabled', 'ttsVoice', 'ttsVolume', 'ttsSpeed', 'ttsAutoSpeed'
+    'enableMultiLayer', 'ttsEnabled', 'ttsVoice', 'ttsVolume', 'ttsSpeed', 'ttsMaxQueue', 'ttsAutoSpeed'
 ];
 
 document.addEventListener('DOMContentLoaded', () => {
