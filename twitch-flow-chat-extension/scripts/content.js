@@ -167,6 +167,7 @@ const MAX_TTS_HISTORY = 20; // 保持する履歴の最大件数
 
 let managedTtsQueue = [];   // アプリ側で管理する読み上げ待ちキュー
 let isTtsSpeaking = false;    // 現在読み上げ中かどうか
+let activeUtterance = null;   // GC対策: 現在再生中のUtteranceを保持
 
 let activeAnimations = new Set(); // 実行中のアニメーション管理
 let isVideoPaused = false; // 動画の一時停止状態フラグ
@@ -553,14 +554,21 @@ const core = {
         utterance.volume = Math.min(1.0, Math.max(0.0, parseFloat(config.ttsVolume) || 1.0)); // 0.0 ~ 1.0
 
         // 完了時にカウントを減らす
+        utterance.onstart = () => {
+            console.debug(SCRIPTNAME, 'TTS Start:', text.substring(0, 20) + (text.length > 20 ? '...' : ''), `(Queue: ${managedTtsQueue.length})`);
+        };
         utterance.onend = () => {
+            console.debug(SCRIPTNAME, 'TTS End');
             ttsCount = Math.max(0, ttsCount - 1);
             isTtsSpeaking = false;
+            activeUtterance = null;
             core.processNextTts();
         };
-        utterance.onerror = () => {
+        utterance.onerror = (e) => {
+            console.error(SCRIPTNAME, 'TTS Error:', e);
             ttsCount = Math.max(0, ttsCount - 1);
             isTtsSpeaking = false;
+            activeUtterance = null;
             core.processNextTts();
         };
 
@@ -584,9 +592,15 @@ const core = {
     processNextTts() {
         if (isTtsSpeaking || managedTtsQueue.length === 0) return;
 
-        const utterance = managedTtsQueue.shift();
+        // ブラウザのTTSエンジンがポーズ状態になっている場合があるための対策
+        if (speechSynthesis.paused) {
+            console.debug(SCRIPTNAME, 'TTS Engine was paused. Resuming...');
+            speechSynthesis.resume();
+        }
+
+        activeUtterance = managedTtsQueue.shift();
         isTtsSpeaking = true;
-        speechSynthesis.speak(utterance);
+        speechSynthesis.speak(activeUtterance);
     },
 
     enqueueComment(commentNode) {
@@ -657,8 +671,8 @@ const core = {
                 // アスペクト比から幅を設定
 
                 if (f.ratio) {
-                    // バッジは少し小さく(0.5em)、スタンプはそのまま(1.2em)
-                    const height = (f.class === 'scroller-badge') ? 0.5 : 1.2;
+                    // バッジは少し小さく(0.5em)、スタンプはそのまま(0.8em)
+                    const height = (f.class === 'scroller-badge') ? 0.5 : 0.8;
                     img.style.height = height + 'em';
                     img.style.width = (f.ratio * height) + 'em';
                 }
