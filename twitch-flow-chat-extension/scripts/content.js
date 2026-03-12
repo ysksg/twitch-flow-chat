@@ -168,6 +168,8 @@ const MAX_TTS_HISTORY = 20; // 保持する履歴の最大件数
 let managedTtsQueue = [];   // アプリ側で管理する読み上げ待ちキュー
 let isTtsSpeaking = false;    // 現在読み上げ中かどうか
 let activeUtterance = null;   // GC対策: 現在再生中のUtteranceを保持
+let ttsHeartbeatTimer = null; // 読み上げ停止防止用ハートビート
+let ttsTimeoutTimer = null;   // スタック防止用タイムアウト
 
 let activeAnimations = new Set(); // 実行中のアニメーション管理
 let isVideoPaused = false; // 動画の一時停止状態フラグ
@@ -336,8 +338,6 @@ const core = {
         style.id = SCRIPTNAME + 'Style';
         style.innerHTML = `
             .flow-text {
-                height: auto !important;
-                line-height: normal !important;
                 width: auto !important;
                 pointer-events: none;      /* クリック透過 */
                 font-family: ${config.fontFamily};
@@ -559,17 +559,11 @@ const core = {
         };
         utterance.onend = () => {
             console.debug(SCRIPTNAME, 'TTS End');
-            ttsCount = Math.max(0, ttsCount - 1);
-            isTtsSpeaking = false;
-            activeUtterance = null;
-            core.processNextTts();
+            core.cleanupTts();
         };
         utterance.onerror = (e) => {
             console.error(SCRIPTNAME, 'TTS Error:', e);
-            ttsCount = Math.max(0, ttsCount - 1);
-            isTtsSpeaking = false;
-            activeUtterance = null;
-            core.processNextTts();
+            core.cleanupTts();
         };
 
         ttsCount++;
@@ -600,7 +594,45 @@ const core = {
 
         activeUtterance = managedTtsQueue.shift();
         isTtsSpeaking = true;
+
+        // タイムアウト監視: 15秒以上経っても終わらない場合は強制終了して次へ
+        if (ttsTimeoutTimer) clearTimeout(ttsTimeoutTimer);
+        ttsTimeoutTimer = setTimeout(() => {
+            if (isTtsSpeaking) {
+                console.warn(SCRIPTNAME, 'TTS Timeout detected. Forcing next.');
+                speechSynthesis.cancel();
+                core.cleanupTts();
+            }
+        }, 15000);
+
+        // ハートビート処理: Chromiumのバグ（長時間再生で止まる）対策
+        if (ttsHeartbeatTimer) clearInterval(ttsHeartbeatTimer);
+        ttsHeartbeatTimer = setInterval(() => {
+            if (speechSynthesis.speaking) {
+                speechSynthesis.pause();
+                speechSynthesis.resume();
+            }
+        }, 5000);
+
         speechSynthesis.speak(activeUtterance);
+    },
+
+    /**
+     * TTSのリソースとタイマーをクリーンアップ
+     */
+    cleanupTts() {
+        if (ttsHeartbeatTimer) {
+            clearInterval(ttsHeartbeatTimer);
+            ttsHeartbeatTimer = null;
+        }
+        if (ttsTimeoutTimer) {
+            clearTimeout(ttsTimeoutTimer);
+            ttsTimeoutTimer = null;
+        }
+        ttsCount = Math.max(0, ttsCount - 1);
+        isTtsSpeaking = false;
+        activeUtterance = null;
+        core.processNextTts();
     },
 
     enqueueComment(commentNode) {
@@ -671,8 +703,8 @@ const core = {
                 // アスペクト比から幅を設定
 
                 if (f.ratio) {
-                    // バッジは少し小さく(0.5em)、スタンプはそのまま(0.8em)
-                    const height = (f.class === 'scroller-badge') ? 0.5 : 0.8;
+                    // バッジは少し小さく(0.5em)、スタンプはそのまま(1.0em)
+                    const height = (f.class === 'scroller-badge') ? 0.5 : 1.0;
                     img.style.height = height + 'em';
                     img.style.width = (f.ratio * height) + 'em';
                 }
@@ -789,6 +821,7 @@ const core = {
         flowText.style.cssText = `
             visibility: ${config.visibility};
             top: ${laneHeight * laneIndex}px;
+            height: ${laneHeight}px;
             font-size: ${fontSizeStr};
             left: 100%;
             white-space: nowrap;
