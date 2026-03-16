@@ -6,12 +6,20 @@
   </head>
   <body>
     <div class="container">
-      <h1>Twitch Flow Chat</h1>
-
-      <div class="section-title">表示設定</div>
+      <h1 data-i18n="title">Twitch Flow Chat</h1>
 
       <div class="field">
-        <label for="visibility">表示</label>
+        <label for="language" data-i18n="language">言語</label>
+        <select id="language">
+          <option value="ja">日本語</option>
+          <option value="en">English</option>
+        </select>
+      </div>
+
+      <div class="section-title" data-i18n="displaySettings">表示設定</div>
+
+      <div class="field">
+        <label for="visibility" data-i18n="visibility">表示</label>
         <select id="visibility">
           <option value="visible">ON</option>
           <option value="hidden">OFF</option>
@@ -19,33 +27,33 @@
       </div>
 
       <div class="field">
-        <label for="color">コメント色</label>
+        <label for="color" data-i18n="commentColor">コメント色</label>
         <input type="color" id="color" />
       </div>
 
       <div class="field">
-        <label for="outlineColor">縁取り色</label>
+        <label for="outlineColor" data-i18n="outlineColor">縁取り色</label>
         <input type="color" id="outlineColor" />
       </div>
 
       <div class="field">
-        <label for="outlineSize">縁取りサイズ (px)</label>
+        <label for="outlineSize" data-i18n="outlineSize">縁取りサイズ (px)</label>
         <input type="number" id="outlineSize" min="0" max="10" step="1" />
       </div>
 
       <div class="field">
-        <label for="opacity">不透明度</label>
+        <label for="opacity" data-i18n="opacity">不透明度</label>
         <input type="range" id="opacity" min="0" max="1" step="0.1" />
         <span id="opacityValue"></span>
       </div>
 
       <div class="field">
-        <label for="fontFamily">フォント</label>
+        <label for="fontFamily" data-i18n="fontFamily">フォント</label>
         <input type="text" id="fontFamily" placeholder="sans-serif, Impact" />
       </div>
 
       <div class="field">
-        <label for="fontSizeMode">フォントサイズ算出モード</label>
+        <label for="fontSizeMode" data-i18n="fontSizeMode">フォントサイズ算出モード</label>
         <select id="fontSizeMode">
           <option value="Auto">Auto (自動計算)</option>
           <option value="Custom">Custom (固定サイズ)</option>
@@ -53,17 +61,17 @@
       </div>
 
       <div class="field" id="customFontSizeField">
-        <label for="customFontSize">フォントサイズ</label>
+        <label for="customFontSize" data-i18n="fontSize">フォントサイズ</label>
         <input type="text" id="customFontSize" placeholder="32px, 1.5em" />
       </div>
 
       <div class="field">
-        <label for="displayLines">表示最大行数</label>
+        <label for="displayLines" data-i18n="maxLines">表示最大行数</label>
         <input type="number" id="displayLines" min="1" max="50" />
       </div>
 
       <div class="field">
-        <label for="anchorPosition">コメント表示エリア アンカー位置</label>
+        <label for="anchorPosition" data-i18n="anchorPosition">コメント表示エリア アンカー位置</label>
         <select id="anchorPosition">
           <option value="Center">Center (中央)</option>
           <option value="Top">Top (上部)</option>
@@ -72,76 +80,79 @@
       </div>
 
       <div class="field">
-        <label for="duration">スクロール秒数</label>
+        <label for="duration" data-i18n="scrollDuration">スクロール秒数</label>
         <input type="number" id="duration" min="1" max="20" step="0.5" />
       </div>
 
       <div class="field checkbox">
         <input type="checkbox" id="showBadges" />
-        <label for="showBadges">バッジを表示</label>
+        <label for="showBadges" data-i18n="showBadges">バッジを表示</label>
       </div>
 
       <div class="field checkbox">
         <input type="checkbox" id="showUsername" />
-        <label for="showUsername">ユーザー名を表示</label>
+        <label for="showUsername" data-i18n="showUsername">ユーザー名を表示</label>
       </div>
 
       <div class="field checkbox">
         <input type="checkbox" id="useUserColor" />
-        <label for="useUserColor">ユーザー名に色を付ける</label>
+        <label for="useUserColor" data-i18n="useUserColor">ユーザー名に色を付ける</label>
       </div>
 
       <div class="field checkbox">
         <input type="checkbox" id="enableQueue" />
-        <label for="enableQueue">溢れたコメントをストック</label>
+        <label for="enableQueue" data-i18n="enableQueue">溢れたコメントをストック</label>
       </div>
 
       <div class="field checkbox">
         <input type="checkbox" id="enableMultiLayer" />
-        <label for="enableMultiLayer">レーン満杯時に隙間に強制表示</label>
+        <label for="enableMultiLayer" data-i18n="enableMultiLayer">レーン満杯時に隙間に強制表示</label>
       </div>
 
-      <div class="section-title">音声読み上げ（TTS）機能</div>
+      <div class="section-title" data-i18n="ttsSettings">音声読み上げ（TTS）機能</div>
 
       <div class="field checkbox">
         <input type="checkbox" id="ttsEnabled" />
-        <label for="ttsEnabled">音声読み上げ機能を有効にする</label>
+        <label for="ttsEnabled" data-i18n="ttsEnabled">音声読み上げ機能を有効にする</label>
       </div>
 
       <div class="field">
-        <label for="ttsVoice">読み上げ音声</label>
+        <label for="ttsVoice" data-i18n="ttsVoice">読み上げ音声</label>
         <div class="tts-voice-container">
           <select id="ttsVoice">
-            <option value="">(読み込み中...)</option>
+            <option value="" data-i18n="loading">(読み込み中...)</option>
           </select>
-          <button id="ttsSpeakSample" title="サンプル再生">▶</button>
+          <button id="ttsSpeakSample" data-i18n="ttsSample" title="サンプル再生">
+            <svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align: middle;"><path fill="currentColor" d="M8 5l11 7-11 7V5z"/></svg>
+          </button>
         </div>
       </div>
 
       <div class="field">
-        <label for="ttsVolume">音量 (0.0 ~ 1.0)</label>
+        <label for="ttsVolume" data-i18n="ttsVolume">音量 (0.0 ~ 1.0)</label>
         <input type="number" id="ttsVolume" min="0.0" max="1.0" step="0.1" />
       </div>
 
       <div class="field">
-        <label for="ttsSpeed">基本速度 (0.1 ~ 3.0)</label>
+        <label for="ttsSpeed" data-i18n="ttsSpeed">基本速度 (0.1 ~ 3.0)</label>
         <input type="number" id="ttsSpeed" min="0.1" max="3.0" step="0.1" />
       </div>
 
       <div class="field">
-        <label for="ttsMaxQueue">読み上げ待ちの最大許容数</label>
+        <label for="ttsMaxQueue" data-i18n="ttsMaxQueue">読み上げ待ちの最大許容数</label>
         <input type="number" id="ttsMaxQueue" min="1" max="50" step="1" />
       </div>
 
       <div class="field checkbox">
         <input type="checkbox" id="ttsAutoSpeed" />
-        <label for="ttsAutoSpeed">コメント量に応じて速度を上げる</label>
+        <label for="ttsAutoSpeed" data-i18n="ttsAutoSpeed">コメント量に応じて速度を上げる</label>
       </div>
 
       <div class="footer">
-        <button id="reset">デフォルトに戻す</button>
+        <button id="reset" data-i18n="reset">デフォルトに戻す</button>
       </div>
     </div>
+    <script src="i18n.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

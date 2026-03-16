@@ -3,7 +3,7 @@
 // @namespace   まままうす
 // @description Twitch のコメントをニコニコ風にスクロールさせます。
 // @match       https://*.twitch.tv/*
-// @version     1.5.1
+// @version     1.6.0
 // @require     https://openuserjs.org/src/libs/sizzle/GM_config.js
 // @grant       GM_registerMenuCommand
 // @grant       GM_getValue
@@ -15,10 +15,71 @@
     const SCRIPTNAME = 'ScreenCommentScroller';
 
     /**
+     * ローカライズ用メッセージ定義
+     */
+    const translations = {
+        ja: {
+            LANGUAGE: '言語 (Language)',
+            COLOR: '文字色',
+            OCOLOR: '縁取り色',
+            OUTLINE_SIZE: '縁取りサイズ (px)',
+            OPACITY: '不透明度',
+            DISPLAY_LINES: '表示最大行数',
+            FONT_SIZE_MODE: 'フォントサイズ算出モード',
+            CUSTOM_FONT_SIZE: '固定フォントサイズ',
+            FONT_FAMILY: 'フォントファミリー',
+            ANCHOR_POSITION: '表示アンカー位置',
+            DURATION: 'スクロール秒数',
+            SHOW_BADGES: 'バッジを表示',
+            SHOW_USERNAME: 'ユーザー名を表示',
+            USE_USER_COLOR: 'ユーザー名に色を付ける',
+            ENABLE_QUEUE: '溢れたコメントをストック',
+            ENABLE_MULTI_LAYER: 'レーン満杯時に隙間に強制表示',
+            TTS_ENABLED: '音声読み上げ (TTS) を有効にする',
+            TTS_VOICE: '読み上げ音声',
+            TTS_VOLUME: '読み上げ音量',
+            TTS_SPEED: '読み上げ基本速度',
+            TTS_MAX_QUEUE: '読み上げ待ちの最大数',
+            TTS_AUTO_SPEED: '量に応じて速度を上げる',
+            SAVE: '保存',
+            CLOSE: '閉じる',
+            RESET: 'デフォルトに戻す'
+        },
+        en: {
+            LANGUAGE: 'Language',
+            COLOR: 'Text Color',
+            OCOLOR: 'Outline Color',
+            OUTLINE_SIZE: 'Outline Size (px)',
+            OPACITY: 'Opacity',
+            DISPLAY_LINES: 'Max Display Lines',
+            FONT_SIZE_MODE: 'Font Size Mode',
+            CUSTOM_FONT_SIZE: 'Custom Font Size',
+            FONT_FAMILY: 'Font Family',
+            ANCHOR_POSITION: 'Anchor Position',
+            DURATION: 'Scroll Duration (sec)',
+            SHOW_BADGES: 'Show Badges',
+            SHOW_USERNAME: 'Show Username',
+            USE_USER_COLOR: 'Color Username',
+            ENABLE_QUEUE: 'Queue Overflow Comments',
+            ENABLE_MULTI_LAYER: 'Force Display on Full Lanes',
+            TTS_ENABLED: 'Enable TTS',
+            TTS_VOICE: 'TTS Voice',
+            TTS_VOLUME: 'TTS Volume',
+            TTS_SPEED: 'TTS Speed',
+            TTS_MAX_QUEUE: 'Max TTS Queue',
+            TTS_AUTO_SPEED: 'Auto Speed Increase',
+            SAVE: 'Save',
+            CLOSE: 'Close',
+            RESET: 'Reset'
+        }
+    };
+
+    /**
      * 設定管理オブジェクト
      * ユーザー設定のデフォルト値と、GM_configからの読み込み同期を担当
      */
     const config = {
+        language: '',              // 言語設定
         visibility: "visible",     // 表示状態 (visible/hidden)
         color: '#ffffff',          // 文字色
         outlineColor: '#000000',   // 縁取り色
@@ -47,6 +108,7 @@
          * GM_configから保存された設定を読み込み、このオブジェクトのプロパティを更新する
          */
         update() {
+            this.language = GM_config.get('LANGUAGE') || (navigator.language.startsWith('ja') ? 'ja' : 'en');
             this.color = GM_config.get('COLOR') || this.color;
             this.outlineColor = GM_config.get('OCOLOR') || this.outlineColor;
             this.outlineSize = GM_config.get('OUTLINE_SIZE') || this.outlineSize;
@@ -71,8 +133,150 @@
             this.ttsAutoSpeed = GM_config.get('TTS_AUTO_SPEED');
 
             console.debug(SCRIPTNAME, 'Config updated:', JSON.parse(JSON.stringify(this)));
+        },
+
+        /**
+         * GM_configの初期化
+         */
+        init() {
+            const currentLang = GM_getValue('LANGUAGE', (navigator.language.startsWith('ja') ? 'ja' : 'en'));
+            const t = translations[currentLang] || translations['en'];
+
+            GM_config.init({
+                id: SCRIPTNAME + 'Config',
+                title: SCRIPTNAME + ' Settings',
+                fields: {
+                    LANGUAGE: {
+                        label: t.LANGUAGE,
+                        type: 'select',
+                        options: ['ja', 'en'],
+                        default: currentLang
+                    },
+                    COLOR: {
+                        label: t.COLOR,
+                        type: 'text',
+                        default: this.color
+                    },
+                    OCOLOR: {
+                        label: t.OCOLOR,
+                        type: 'text',
+                        default: this.outlineColor
+                    },
+                    OUTLINE_SIZE: {
+                        label: t.OUTLINE_SIZE,
+                        type: 'unsigned float',
+                        default: this.outlineSize
+                    },
+                    OPACITY: {
+                        label: t.OPACITY,
+                        type: 'float',
+                        default: this.opacity
+                    },
+                    DISPLAY_LINES: {
+                        label: t.DISPLAY_LINES,
+                        type: 'unsigned int',
+                        default: this.displayLines
+                    },
+                    FONT_SIZE_MODE: {
+                        label: t.FONT_SIZE_MODE,
+                        type: 'select',
+                        options: ['Auto', 'Custom'],
+                        default: this.fontSizeMode
+                    },
+                    CUSTOM_FONT_SIZE: {
+                        label: t.CUSTOM_FONT_SIZE,
+                        type: 'text',
+                        default: this.customFontSize
+                    },
+                    FONT_FAMILY: {
+                        label: t.FONT_FAMILY,
+                        type: 'text',
+                        default: this.fontFamily
+                    },
+                    ANCHOR_POSITION: {
+                        label: t.ANCHOR_POSITION,
+                        type: 'select',
+                        options: ['Center', 'Top', 'Bottom'],
+                        default: this.anchorPosition
+                    },
+                    DURATION: {
+                        label: t.DURATION,
+                        type: 'unsigned float',
+                        default: this.duration
+                    },
+                    SHOW_BADGES: {
+                        label: t.SHOW_BADGES,
+                        type: 'checkbox',
+                        default: this.showBadges
+                    },
+                    SHOW_USERNAME: {
+                        label: t.SHOW_USERNAME,
+                        type: 'checkbox',
+                        default: this.showUsername
+                    },
+                    USE_USER_COLOR: {
+                        label: t.USE_USER_COLOR,
+                        type: 'checkbox',
+                        default: this.useUserColor
+                    },
+                    ENABLE_QUEUE: {
+                        label: t.ENABLE_QUEUE,
+                        type: 'checkbox',
+                        default: this.enableQueue
+                    },
+                    ENABLE_MULTI_LAYER: {
+                        label: t.ENABLE_MULTI_LAYER,
+                        type: 'checkbox',
+                        default: this.enableMultiLayer
+                    },
+                    TTS_ENABLED: {
+                        label: t.TTS_ENABLED,
+                        type: 'checkbox',
+                        default: this.ttsEnabled
+                    },
+                    TTS_VOICE: {
+                        label: t.TTS_VOICE,
+                        type: 'text', // GM_configで動的リストを作るのは難しいため、一旦text/保存されたものを。
+                        default: this.ttsVoice
+                    },
+                    TTS_VOLUME: {
+                        label: t.TTS_VOLUME,
+                        type: 'float',
+                        default: this.ttsVolume
+                    },
+                    TTS_SPEED: {
+                        label: t.TTS_SPEED,
+                        type: 'float',
+                        default: this.ttsSpeed
+                    },
+                    TTS_MAX_QUEUE: {
+                        label: t.TTS_MAX_QUEUE,
+                        type: 'unsigned int',
+                        default: this.ttsMaxQueue
+                    },
+                    TTS_AUTO_SPEED: {
+                        label: t.TTS_AUTO_SPEED,
+                        type: 'checkbox',
+                        default: this.ttsAutoSpeed
+                    }
+                },
+                events: {
+                    save: () => {
+                        config.update();
+                        const newLang = GM_config.get('LANGUAGE');
+                        if (newLang !== currentLang) {
+                            // 言語が変わった場合は再初期化して閉じる（次回表示時に反映）
+                            // または reload でも良い
+                            location.reload();
+                        }
+                    }
+                }
+            });
+            this.update();
         }
     };
+    
+    // config.init() は後ほど core.initialize 以前に呼び出す
 
     /**
      * サイト定義
@@ -248,6 +452,7 @@
          */
         initialize() {
             console.log(SCRIPTNAME, 'initialize');
+            config.init(); // 設定の初期化
             lanes = {}; // レーン情報をリセット
             ttsCount = 0;
             recentTtsTexts = [];
