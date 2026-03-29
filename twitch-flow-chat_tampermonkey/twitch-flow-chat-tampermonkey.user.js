@@ -3,7 +3,7 @@
 // @namespace   まままうす
 // @description Twitch のコメントをニコニコ風にスクロールさせます。
 // @match       https://*.twitch.tv/*
-// @version     1.6.0
+// @version     1.6.1
 // @require     https://openuserjs.org/src/libs/sizzle/GM_config.js
 // @grant       GM_registerMenuCommand
 // @grant       GM_getValue
@@ -107,41 +107,62 @@
          * 設定の同期
          * GM_configから保存された設定を読み込み、このオブジェクトのプロパティを更新する
          */
-        update() {
-            this.language = GM_config.get('LANGUAGE') || (navigator.language.startsWith('ja') ? 'ja' : 'en');
-            this.color = GM_config.get('COLOR') || this.color;
-            this.outlineColor = GM_config.get('OCOLOR') || this.outlineColor;
-            this.outlineSize = GM_config.get('OUTLINE_SIZE') || this.outlineSize;
-            this.opacity = GM_config.get('OPACITY') || this.opacity;
-            this.displayLines = GM_config.get('DISPLAY_LINES') || this.displayLines;
-            this.fontSizeMode = GM_config.get('FONT_SIZE_MODE') || this.fontSizeMode;
-            this.customFontSize = GM_config.get('CUSTOM_FONT_SIZE') || this.customFontSize;
-            this.fontFamily = GM_config.get('FONT_FAMILY') || this.fontFamily;
-            this.anchorPosition = GM_config.get('ANCHOR_POSITION') || this.anchorPosition;
-            this.duration = GM_config.get('DURATION') || this.duration;
-            this.showBadges = GM_config.get('SHOW_BADGES');
-            this.showUsername = GM_config.get('SHOW_USERNAME');
-            this.useUserColor = GM_config.get('USE_USER_COLOR');
-            this.enableQueue = GM_config.get('ENABLE_QUEUE');
+        /**
+         * 設定の同期
+         * GM_configから保存された設定を読み込み、このオブジェクトのプロパティを更新する
+         * @param {Object} [instance] GM_configのインスタンス（省略時はグローバルのGM_configを使用）
+         */
+        update(instance) {
+            const cfg = instance || GM_config;
+            // GM_configが初期化されていない場合は何もしない
+            if (!cfg || !cfg.fields) {
+                console.debug(SCRIPTNAME, 'Config.update skipped: GM_config not initialized.');
+                return;
+            }
 
-            this.enableMultiLayer = GM_config.get('ENABLE_MULTI_LAYER');
-            this.ttsEnabled = GM_config.get('TTS_ENABLED');
-            this.ttsVoice = GM_config.get('TTS_VOICE');
-            this.ttsVolume = GM_config.get('TTS_VOLUME');
-            this.ttsSpeed = GM_config.get('TTS_SPEED');
-            this.ttsMaxQueue = GM_config.get('TTS_MAX_QUEUE') || 5;
-            this.ttsAutoSpeed = GM_config.get('TTS_AUTO_SPEED');
+            try {
+                this.language = cfg.get('LANGUAGE') || (navigator.language.startsWith('ja') ? 'ja' : 'en');
+                this.color = cfg.get('COLOR') || this.color;
+                this.outlineColor = cfg.get('OCOLOR') || this.outlineColor;
+                this.outlineSize = cfg.get('OUTLINE_SIZE') || this.outlineSize;
+                this.opacity = cfg.get('OPACITY') || this.opacity;
+                this.displayLines = cfg.get('DISPLAY_LINES') || this.displayLines;
+                this.fontSizeMode = cfg.get('FONT_SIZE_MODE') || this.fontSizeMode;
+                this.customFontSize = cfg.get('CUSTOM_FONT_SIZE') || this.customFontSize;
+                this.fontFamily = cfg.get('FONT_FAMILY') || this.fontFamily;
+                this.anchorPosition = cfg.get('ANCHOR_POSITION') || this.anchorPosition;
+                this.duration = cfg.get('DURATION') || this.duration;
+                this.showBadges = cfg.get('SHOW_BADGES');
+                this.showUsername = cfg.get('SHOW_USERNAME');
+                this.useUserColor = cfg.get('USE_USER_COLOR');
+                this.enableQueue = cfg.get('ENABLE_QUEUE');
 
-            console.debug(SCRIPTNAME, 'Config updated:', JSON.parse(JSON.stringify(this)));
+                this.enableMultiLayer = cfg.get('ENABLE_MULTI_LAYER');
+                this.ttsEnabled = cfg.get('TTS_ENABLED');
+                this.ttsVoice = cfg.get('TTS_VOICE');
+                this.ttsVolume = cfg.get('TTS_VOLUME');
+                this.ttsSpeed = cfg.get('TTS_SPEED');
+                this.ttsMaxQueue = cfg.get('TTS_MAX_QUEUE') || 5;
+                this.ttsAutoSpeed = cfg.get('TTS_AUTO_SPEED');
+
+                console.debug(SCRIPTNAME, 'Config updated:', JSON.parse(JSON.stringify(this)));
+            } catch (e) {
+                console.error(SCRIPTNAME, 'Config update failed:', e);
+            }
         },
+
+        initialized: false,
 
         /**
          * GM_configの初期化
          */
         init() {
+            if (this.initialized) return;
+
             const currentLang = GM_getValue('LANGUAGE', (navigator.language.startsWith('ja') ? 'ja' : 'en'));
             const t = translations[currentLang] || translations['en'];
 
+            const self = this;
             GM_config.init({
                 id: SCRIPTNAME + 'Config',
                 title: SCRIPTNAME + ' Settings',
@@ -236,7 +257,8 @@
                     },
                     TTS_VOICE: {
                         label: t.TTS_VOICE,
-                        type: 'text', // GM_configで動的リストを作るのは難しいため、一旦text/保存されたものを。
+                        type: 'select',
+                        options: ['(Default)'], // openイベントで動的に追加
                         default: this.ttsVoice
                     },
                     TTS_VOLUME: {
@@ -258,22 +280,92 @@
                         label: t.TTS_AUTO_SPEED,
                         type: 'checkbox',
                         default: this.ttsAutoSpeed
+                    },
+                    TTS_SAMPLE_BTN: {
+                        label: 'Sample Voice',
+                        type: 'button',
+                        click: () => {
+                            const voiceName = GM_config.get('TTS_VOICE');
+                            const speed = parseFloat(GM_config.get('TTS_SPEED')) || 1.0;
+                            const volume = parseFloat(GM_config.get('TTS_VOLUME')) || 1.0;
+                            const text = (voiceName.includes('ja') || voiceName.includes('JP'))
+                                ? "これはサンプル音声です"
+                                : "This is a sample voice";
+
+                            const utterance = new SpeechSynthesisUtterance(text);
+                            const voices = speechSynthesis.getVoices();
+                            const voice = voices.find(v => v.name === voiceName);
+                            if (voice) utterance.voice = voice;
+                            utterance.rate = speed;
+                            utterance.volume = volume;
+
+                            speechSynthesis.cancel();
+                            speechSynthesis.speak(utterance);
+                        }
                     }
                 },
                 events: {
-                    save: () => {
-                        config.update();
-                        const newLang = GM_config.get('LANGUAGE');
+                    init: function() {
+                        self.update(this);
+                    },
+                    save: function() {
+                        self.update(this);
+                        const newLang = this.get('LANGUAGE');
                         if (newLang !== currentLang) {
-                            // 言語が変わった場合は再初期化して閉じる（次回表示時に反映）
-                            // または reload でも良い
                             location.reload();
                         }
+                    },
+                    open: function() {
+                        const configInstance = this;
+                        // 音声リストを動的に更新
+                        const updateVoiceOptions = () => {
+                            const voices = speechSynthesis.getVoices();
+                            if (voices.length === 0) return;
+
+                            const voiceField = configInstance.fields['TTS_VOICE'];
+                            const select = voiceField.node;
+                            if (!select) return;
+
+                            const savedValue = configInstance.get('TTS_VOICE');
+                            select.innerHTML = '';
+
+                            const options = [{ name: '', label: '(システムデフォルト)' }];
+
+                            const sortedVoices = [...voices].sort((a, b) => {
+                                const aIsJa = a.lang.startsWith('ja');
+                                const bIsJa = b.lang.startsWith('ja');
+                                if (aIsJa && !bIsJa) return -1;
+                                if (!aIsJa && bIsJa) return 1;
+                                const aIsEn = a.lang.startsWith('en');
+                                const bIsEn = b.lang.startsWith('en');
+                                if (aIsEn && !bIsEn) return -1;
+                                if (!aIsEn && bIsEn) return 1;
+                                return a.name.localeCompare(b.name);
+                            });
+
+                            sortedVoices.forEach(v => {
+                                options.push({ name: v.name, label: `${v.name} (${v.lang})` });
+                            });
+
+                            options.forEach(opt => {
+                                const el = document.createElement('option');
+                                el.value = opt.name;
+                                el.textContent = opt.label;
+                                if (opt.name === savedValue) el.selected = true;
+                                select.appendChild(el);
+                            });
+                        };
+
+                        if (speechSynthesis.onvoiceschanged !== undefined) {
+                            speechSynthesis.onvoiceschanged = updateVoiceOptions;
+                        }
+                        updateVoiceOptions();
                     }
                 }
             });
-            this.update();
+            this.initialized = true;
         }
+
     };
     
     // config.init() は後ほど core.initialize 以前に呼び出す
@@ -1202,179 +1294,14 @@
         },
 
         /**
-         * 設定画面の構築 (GM_config利用)
+         * 設定画面の起動メニュー登録
          */
         settings() {
-            GM.registerMenuCommand("設定", () => GM_config.open());
-            GM_config.init({
-                'id': SCRIPTNAME,
-                'title': SCRIPTNAME + ' 設定',
-                'fields': {
-                    'COLOR': { 'section': ['表示設定', 'コメントの見た目に関する設定'], 'label': 'コメント色', 'type': 'text', 'default': config.color },
-                    'OCOLOR': { 'label': 'コメント縁取り色', 'type': 'text', 'default': config.outlineColor },
-                    'OUTLINE_SIZE': { 'label': '縁取りサイズ (px)', 'type': 'int', 'default': config.outlineSize },
-                    'OPACITY': { 'label': 'コメントの不透明度 (0.0~1.0)', 'type': 'float', 'default': config.opacity },
-
-                    'FONT_FAMILY': {
-                        'label': 'フォントファミリー (例: sans-serif, Impact)',
-                        'type': 'text',
-                        'default': config.fontFamily
-                    },
-                    'FONT_SIZE_MODE': {
-                        'label': 'フォントサイズ算出モード',
-                        'type': 'select',
-                        'options': ['Auto', 'Custom'],
-                        'default': config.fontSizeMode,
-                        'title': 'Auto: 画面高さ÷表示最大行数で自動計算 / Custom: 固定サイズを使用'
-                    },
-                    'CUSTOM_FONT_SIZE': {
-                        'label': 'カスタムフォントサイズ (Custom時のみ有効)',
-                        'type': 'text',
-                        'default': config.customFontSize,
-                        'title': '固定の文字サイズ (例: 32px, 1.5em)'
-                    },
-                    'DISPLAY_LINES': {
-                        'label': '表示最大行数',
-                        'type': 'int',
-                        'default': config.displayLines,
-                        'title': '実際に表示を許可する最大レーン数（Autoモードのサイズ基準にもなります）'
-                    },
-                    'ANCHOR_POSITION': {
-                        'label': 'コメント表示エリアのアンカー位置',
-                        'type': 'select',
-                        'options': ['Center', 'Top', 'Bottom'],
-                        'default': config.anchorPosition,
-                        'title': 'Center: 動画に合わせて中央に表示 / Top: 上部固定 / Bottom: 下部固定'
-                    },
-                    'DURATION': { 'label': 'スクロール秒数', 'type': 'float', 'default': config.duration },
-                    'SHOW_BADGES': { 'label': 'バッジを表示', 'type': 'checkbox', 'default': config.showBadges },
-                    'SHOW_USERNAME': { 'label': 'ユーザー名を表示', 'type': 'checkbox', 'default': config.showUsername },
-                    'USE_USER_COLOR': { 'label': 'ユーザー名に色を付ける', 'type': 'checkbox', 'default': config.useUserColor },
-                    'ENABLE_MULTI_LAYER': {
-                        'label': 'レーン満杯時に隙間に詰めて強制表示する',
-                        'type': 'checkbox',
-                        'default': config.enableMultiLayer,
-                        'title': 'チェックを入れると、通常の表示行がすべて埋まっている時に、行と行の隙間（0.5行ずらした位置）にコメントを強制的に割り込ませて表示します'
-                    },
-                    'ENABLE_QUEUE': {
-                        'label': '溢れたコメントをストックする（キュー機能）',
-                        'type': 'checkbox',
-                        'default': config.enableQueue,
-                        'title': 'チェックを入れると、表示制限に引っかかったコメントを捨てずに空きを待ちます'
-                    },
-
-                    // 音声読み上げ設定
-                    'TTS_ENABLED': {
-                        'section': ['音声読み上げ（TTS）機能', 'コメント本文の読み上げに関する設定'],
-                        'label': '音声読み上げ機能を有効にする',
-                        'type': 'checkbox',
-                        'default': config.ttsEnabled
-                    },
-                    'TTS_VOICE': {
-                        'label': '読み上げ音声',
-                        'type': 'select',
-                        'options': ['(システムデフォルト)'],
-                        'default': config.ttsVoice || ''
-                    },
-                    'TTS_VOLUME': {
-                        'label': '読み上げ音量 (0.0 ~ 1.0)',
-                        'type': 'float',
-                        'default': config.ttsVolume
-                    },
-                    'TTS_SPEED': {
-                        'label': '読み上げ基本速度 (0.1 ~ 3.0)',
-                        'type': 'float',
-                        'default': config.ttsSpeed
-                    },
-                    'TTS_AUTO_SPEED': {
-                        'label': '量に応じて速度を自動調整する',
-                        'type': 'checkbox',
-                        'default': config.ttsAutoSpeed,
-                        'title': 'コメントが多いときに読み上げが詰まらないよう自動で速度を上げます'
-                    },
-                    'TTS_MAX_QUEUE': {
-                        'label': '読み上げ待ちの最大許容数',
-                        'type': 'int',
-                        'default': config.ttsMaxQueue,
-                        'title': '読み上げ待ちがこの件数を超えた場合、古い方からスキップします'
-                    },
-                    'TTS_SAMPLE_BTN': {
-                        'label': 'サンプル音声再生',
-                        'type': 'button',
-                        'click': () => {
-                            const voiceName = GM_config.get('TTS_VOICE');
-                            const speed = parseFloat(GM_config.get('TTS_SPEED')) || 1.0;
-                            const volume = parseFloat(GM_config.get('TTS_VOLUME')) || 1.0;
-                            const text = (voiceName.includes('ja') || voiceName.includes('JP'))
-                                ? "これはサンプル音声です"
-                                : "This is a sample voice";
-
-                            const utterance = new SpeechSynthesisUtterance(text);
-                            const voices = speechSynthesis.getVoices();
-                            const voice = voices.find(v => v.name === voiceName);
-                            if (voice) utterance.voice = voice;
-                            utterance.rate = speed;
-                            utterance.volume = volume;
-
-                            speechSynthesis.cancel();
-                            speechSynthesis.speak(utterance);
-                        }
-                    }
-                },
-
-                'events': {
-                    'init': () => config.update(),
-                    'open': () => {
-                        // 音声リストを動的に更新
-                        const updateVoiceOptions = () => {
-                            const voices = speechSynthesis.getVoices();
-                            if (voices.length === 0) return;
-
-                            const voiceField = GM_config.fields['TTS_VOICE'];
-                            const select = voiceField.node;
-                            if (!select) return;
-
-                            const savedValue = GM_config.get('TTS_VOICE');
-                            select.innerHTML = '';
-
-                            const options = [{ name: '', label: '(システムデフォルト)' }];
-
-                            const sortedVoices = [...voices].sort((a, b) => {
-                                const aIsJa = a.lang.startsWith('ja');
-                                const bIsJa = b.lang.startsWith('ja');
-                                if (aIsJa && !bIsJa) return -1;
-                                if (!aIsJa && bIsJa) return 1;
-                                const aIsEn = a.lang.startsWith('en');
-                                const bIsEn = b.lang.startsWith('en');
-                                if (aIsEn && !bIsEn) return -1;
-                                if (!aIsEn && bIsEn) return 1;
-                                return a.name.localeCompare(b.name);
-                            });
-
-                            sortedVoices.forEach(v => {
-                                options.push({ name: v.name, label: `${v.name} (${v.lang})` });
-                            });
-
-                            options.forEach(opt => {
-                                const el = document.createElement('option');
-                                el.value = opt.name;
-                                el.textContent = opt.label;
-                                if (opt.name === savedValue) el.selected = true;
-                                select.appendChild(el);
-                            });
-                        };
-
-                        if (speechSynthesis.onvoiceschanged !== undefined) {
-                            speechSynthesis.onvoiceschanged = updateVoiceOptions;
-                        }
-                        updateVoiceOptions();
-                    },
-                    'save': () => { config.update(); configEdit = true; } // 保存時に再初期化フラグを立てる
-                },
-            });
+            GM_registerMenuCommand("設定", () => GM_config.open());
         }
     };
 
+    config.init(); // 起動時に一度だけ初期化
     core.settings();
     core.waitStart();
 })();
